@@ -1,0 +1,2 @@
+Command to start surreal
+surreal start memory -A --auth --user root --pass root
