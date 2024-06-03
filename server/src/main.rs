@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 //use serde_json::json;
 use std::fs::{File, OpenOptions};
 use std::io::{prelude::*, BufReader};
+use std::path::Path;
 use warp::{Filter, Rejection, Reply};
 
 #[derive(Deserialize)]
@@ -9,10 +10,16 @@ struct Agent {
     uuid: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Job {
     agent_uuid: String,
     command: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct JobOutput {
+    agent_uuid: String,
+    output: String,
 }
 
 #[derive(Serialize)]
@@ -97,18 +104,45 @@ fn register_agent_handler(agent: Agent) -> impl Reply {
  * We're sending the 'Response' type we created that implements 'Serialize'
 */
 fn exec_cmd_handler(job: Job) -> impl Reply {
+    //! Unsafe unwrap fix
+    let serialized_job = serde_json::to_string(&job).unwrap();
+    let file_path = "job_list";
+
+    // Open the file in write mode, create file if it doesn't exist
+    let mut file = File::create(file_path).unwrap();
+
+    // Write the JSON to the file
+    file.write_all(serialized_job.as_bytes()).unwrap();
     println!("IT WORKS");
     println!("{}", job.command);
     let response = Response {
-        message: "Executing Job".to_string(),
+        message: job.command,
     };
     warp::reply::json(&response)
+}
+
+fn job_output_handler(output: JobOutput) -> impl Reply {
+    let serialized_output = serde_json::to_string(&output).unwrap();
+    let file_path = "job_output";
+
+    // Will create file if it doesn't exist
+    let mut file = File::create(file_path).unwrap();
+
+    // write output to output file
+    ///! unsafe unwrap
+    file.write_all(serialized_output.as_bytes()).unwrap();
+    println!("Successfully wrote job output\n");
+    "Successfully stored output"
 }
 
 #[tokio::main]
 async fn main() {
     let list_agents_route = warp::path!("list_agents").and(warp::fs::file("agent_list"));
     let list_jobs_route = warp::path!("list_jobs").and(warp::fs::file("job_list"));
+    let jobs_output_route = warp::path!("job_output")
+        .and(warp::post())
+        .and(warp::body::json())
+        .map(|output: JobOutput| job_output_handler(output));
     let exec_cmd_route = warp::path!("exec_cmd")
         .and(warp::post())
         .and(warp::body::json())
@@ -121,7 +155,7 @@ async fn main() {
 
     let get_routes = warp::get().and(list_agents_route.or(list_jobs_route));
     let post_routes = warp::post().and(exec_cmd_route.or(register_agent));
-    let routes = get_routes.or(post_routes);
+    let routes = get_routes.or(post_routes).or(jobs_output_route);
 
     warp::serve(routes)
         .tls()
