@@ -7,7 +7,12 @@ use warp::{Filter, Rejection, Reply};
 #[derive(Deserialize)]
 struct Agent {
     uuid: String,
-    // Add other fields as needed
+}
+
+#[derive(Deserialize)]
+struct Job {
+    agent_uuid: String,
+    command: String,
 }
 
 #[derive(Serialize)]
@@ -20,7 +25,7 @@ struct Response {
 // Reply trait, this could be a String or warp::reply::json()
 // The Err() variant will return a Rejection which is a type from warp that
 // means a request failed
-async fn register_agent_handler(agent: Agent) -> Result<impl Reply, Rejection> {
+fn register_agent_handler(agent: Agent) -> impl Reply {
     let file_path = "agent_list";
 
     // Read the existing agent list from the file
@@ -31,7 +36,7 @@ async fn register_agent_handler(agent: Agent) -> Result<impl Reply, Rejection> {
             let response = Response {
                 message: "Error opening file for reading".to_string(),
             };
-            return Ok(warp::reply::json(&response));
+            return warp::reply::json(&response);
         }
     };
     let reader = BufReader::new(file);
@@ -45,7 +50,7 @@ async fn register_agent_handler(agent: Agent) -> Result<impl Reply, Rejection> {
         let response = Response {
             message: format!("Agent with ID {} already exists", agent.uuid),
         };
-        return Ok(warp::reply::json(&response));
+        return warp::reply::json(&response);
     }
 
     // Append the new agent to the file
@@ -61,7 +66,7 @@ async fn register_agent_handler(agent: Agent) -> Result<impl Reply, Rejection> {
             let response = Response {
                 message: "Error opening file for appending".to_string(),
             };
-            return Ok(warp::reply::json(&response));
+            return warp::reply::json(&response);
         }
     };
 
@@ -71,32 +76,48 @@ async fn register_agent_handler(agent: Agent) -> Result<impl Reply, Rejection> {
             let response = Response {
                 message: "Successfully registered agent".to_string(),
             };
-            Ok(warp::reply::json(&response))
+            warp::reply::json(&response)
         }
         Err(e) => {
             eprintln!("Error writing to file: {}", e);
             let response = Response {
                 message: "Error writing to file".to_string(),
             };
-            Ok(warp::reply::json(&response))
+            warp::reply::json(&response)
         }
     }
 }
 
-fn exec_cmd_handler() -> impl Reply {
+/*
+ * By saying that we are returning a impl Reply, for the Ok() variant of Result, we are
+ * saying that we are returning any type that implements the 'Reply' trait
+ *
+ * We're sending back a json response using 'warp::reply::json'
+ *
+ * We're sending the 'Response' type we created that implements 'Serialize'
+*/
+fn exec_cmd_handler(job: Job) -> impl Reply {
     println!("IT WORKS");
-    "Executing job"
+    println!("{}", job.command);
+    let response = Response {
+        message: "Executing Job".to_string(),
+    };
+    warp::reply::json(&response)
 }
 
 #[tokio::main]
 async fn main() {
     let list_agents_route = warp::path!("list_agents").and(warp::fs::file("agent_list"));
     let list_jobs_route = warp::path!("list_jobs").and(warp::fs::file("job_list"));
-    let exec_cmd_route = warp::path!("exec_cmd").map(|| exec_cmd_handler());
+    let exec_cmd_route = warp::path!("exec_cmd")
+        .and(warp::post())
+        .and(warp::body::json())
+        //.and_then(exec_cmd_handler);
+        .map(|job: Job| exec_cmd_handler(job));
     let register_agent = warp::path!("register_agent")
         .and(warp::post())
         .and(warp::body::json())
-        .and_then(register_agent_handler);
+        .map(|agent: Agent| register_agent_handler(agent));
 
     let get_routes = warp::get().and(list_agents_route.or(list_jobs_route));
     let post_routes = warp::post().and(exec_cmd_route.or(register_agent));

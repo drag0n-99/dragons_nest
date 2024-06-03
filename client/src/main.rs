@@ -1,5 +1,13 @@
 use clap::{Arg, ArgAction::Set, Command};
 use reqwest::{Client, Error};
+use serde::Serialize;
+use serde_json::json;
+
+#[derive(Serialize)]
+struct Job {
+    agent_uuid: String,
+    command: String,
+}
 
 async fn list_agents_handler() -> Result<(), Error> {
     let client = Client::builder()
@@ -35,7 +43,15 @@ async fn list_jobs_handler() -> Result<(), Error> {
     Ok(())
 }
 
-async fn exec_cmd_handler(agent_id: u128, command: &String) -> Result<(), Error> {
+async fn exec_cmd_handler(agent_uuid: &String, command: &String) -> Result<(), Error> {
+    let job = Job {
+        agent_uuid: agent_uuid.clone(),
+        command: command.clone(),
+    };
+
+    ///! Unsafe unwrap change
+    let serialized_job = serde_json::to_string(&job).unwrap();
+
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
         .use_rustls_tls()
@@ -43,12 +59,15 @@ async fn exec_cmd_handler(agent_id: u128, command: &String) -> Result<(), Error>
 
     let content = client
         .post("https://127.0.0.1:3031/exec_cmd")
+        .body(serialized_job)
         .send()
         .await?
         .text()
         .await?;
 
     println!("text: {content:?}");
+    println!("agent id: {}", agent_uuid);
+    println!("cmd: {}", command);
     Ok(())
 }
 
@@ -88,26 +107,23 @@ async fn main() -> Result<(), Error> {
         // Some(("list-jobs", _)) => println!("run jobs() function"),
         Some(("list-jobs", _)) => list_jobs_handler().await?,
         Some(("exec", sub_m)) => {
-            // Parse the agent_id to be a u128
-            let agent_id: u128 = sub_m
+            // Parse the agent_uuid to be a u128
+            let agent_uuid: &String = sub_m
                 // The signature for .get_one is this pub fn get_one<T>(&self, id: &str) -> Option<&T>
                 // This means that we have to specify the type that is to be returned
                 // By specify String as the type we are saying that the return type is string
                 // This makes sense because all user input from the console is a String
                 .get_one::<String>("agent-uuid")
-                .expect("Agent ID is required")
-                // Parse argument to u128
-                .parse()
-                .expect("Error: Invalid agent ID");
+                .expect("Agent ID is required");
 
             let command: &String = sub_m
                 .get_one::<String>("command")
                 .expect("Command is required");
 
-            exec_cmd_handler(agent_id, command).await?;
+            exec_cmd_handler(agent_uuid, command).await?;
             println!(
-                "run exec() function, agent_id is {} and command is {}",
-                agent_id, command
+                "run exec() function, agent_uuid is {} and command is {}",
+                agent_uuid, command
             );
         }
         _ => unreachable!("Exhaustive checking in subcommand match failed"),

@@ -47,7 +47,7 @@ async fn main() -> Result<(), Error> {
     }
 
     let body = json!({"uuid": uuid});
-    let content = client
+    let register_agent_status = client
         .post("https://127.0.0.1:3031/register_agent")
         .json(&body)
         .send()
@@ -55,7 +55,20 @@ async fn main() -> Result<(), Error> {
         .text()
         .await?;
 
-    println!("text: {content:?}");
+    println!("text: {register_agent_status:?}");
+
+    // Start infinite loop, query for jobs
+    loop {
+        let cmd_to_run = client
+            .get("https://127.0.0.1:3031/list_jobs")
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        println!("text: {cmd_to_run:?}");
+        break;
+    }
 
     Ok(())
 }

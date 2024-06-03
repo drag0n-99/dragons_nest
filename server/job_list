@@ -1,2 +1,1 @@
-agent_id agent_name command_run time_ran output
-1234 default ls jun-1-2024@09:12UTC {}
+1234 ls
