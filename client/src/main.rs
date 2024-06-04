@@ -2,19 +2,18 @@ use clap::{Arg, ArgAction::Set, Command};
 use reqwest::{Client, Error};
 use serde::Serialize;
 use serde_json::json;
+use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Serialize)]
 struct Job {
     agent_uuid: String,
+    job_uuid: String,
     command: String,
+    output: String,
 }
 
-async fn list_agents_handler() -> Result<(), Error> {
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .use_rustls_tls()
-        .build()?;
-
+async fn list_agents(client: &Client) -> Result<(), Error> {
     let content = client
         .get("https://127.0.0.1:3031/list_agents")
         .send()
@@ -22,16 +21,17 @@ async fn list_agents_handler() -> Result<(), Error> {
         .text()
         .await?;
 
-    println!("text: {content:?}");
+    ///!unsafe unwrap
+    let agents: HashMap<String, String> = serde_json::from_str(&content).unwrap();
+
+    println!("Keys in the agents HashMap:");
+    for key in agents.keys() {
+        println!("{}", key);
+    }
     Ok(())
 }
 
-async fn list_jobs_handler() -> Result<(), Error> {
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .use_rustls_tls()
-        .build()?;
-
+async fn list_jobs(client: &Client) -> Result<(), Error> {
     let content = client
         .get("https://127.0.0.1:3031/list_jobs")
         .send()
@@ -43,22 +43,19 @@ async fn list_jobs_handler() -> Result<(), Error> {
     Ok(())
 }
 
-async fn exec_cmd_handler(agent_uuid: &String, command: &String) -> Result<(), Error> {
+async fn send_job(client: &Client, agent_uuid: &String, command: &String) -> Result<(), Error> {
     let job = Job {
         agent_uuid: agent_uuid.clone(),
+        job_uuid: Uuid::new_v4().to_string(),
         command: command.clone(),
+        output: "".to_string(),
     };
 
     ///! Unsafe unwrap change
     let serialized_job = serde_json::to_string(&job).unwrap();
 
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .use_rustls_tls()
-        .build()?;
-
     let content = client
-        .post("https://127.0.0.1:3031/exec_cmd")
+        .post("https://127.0.0.1:3031/send_job")
         .body(serialized_job)
         .send()
         .await?
@@ -73,6 +70,11 @@ async fn exec_cmd_handler(agent_uuid: &String, command: &String) -> Result<(), E
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    let client = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .use_rustls_tls()
+        .build()?;
+
     let matches = Command::new(clap::crate_name!())
         .version(clap::crate_version!())
         .about(clap::crate_description!())
@@ -103,9 +105,9 @@ async fn main() -> Result<(), Error> {
     // pub fn subcommand(&self) -> Option<(&str, &ArgMatches)>
     // Returns a tuple of two values the first is the Arg id, the second is a reference to the arguments and their values
     match matches.subcommand() {
-        Some(("list-agents", _)) => list_agents_handler().await?,
+        Some(("list-agents", _)) => list_agents(&client).await?,
         // Some(("list-jobs", _)) => println!("run jobs() function"),
-        Some(("list-jobs", _)) => list_jobs_handler().await?,
+        Some(("list-jobs", _)) => list_jobs(&client).await?,
         Some(("exec", sub_m)) => {
             // Parse the agent_uuid to be a u128
             let agent_uuid: &String = sub_m
@@ -120,7 +122,7 @@ async fn main() -> Result<(), Error> {
                 .get_one::<String>("command")
                 .expect("Command is required");
 
-            exec_cmd_handler(agent_uuid, command).await?;
+            send_job(&client, agent_uuid, command).await?;
             println!(
                 "run exec() function, agent_uuid is {} and command is {}",
                 agent_uuid, command
