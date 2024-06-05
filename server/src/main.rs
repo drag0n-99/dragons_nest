@@ -253,6 +253,55 @@ fn pending_jobs(agent: Agent) -> impl Reply {
     }
 }
 
+fn get_job_output(job: Job) -> impl Reply {
+    /*
+    Note that the file operations are blocking the whole thread, this decreases
+    perf but won't lead to data races so no need for locks
+    */
+
+    let file_path = "job_list";
+
+    println!("loading jobs for job_output\n");
+    // Load job_list as the jobs HashMap
+    let mut jobs: HashMap<String, HashMap<String, HashMap<String, String>>> =
+        if Path::new(file_path).exists() {
+            ///!unsafe unwrap
+            let mut file = File::open(file_path).unwrap();
+            let mut contents = String::new();
+            ///!unsafe unwrap
+            file.read_to_string(&mut contents).unwrap();
+
+            ///!unsafe unwrap
+            let jobs: HashMap<String, HashMap<String, HashMap<String, String>>> =
+                serde_json::from_str(&contents).unwrap();
+            jobs
+        } else {
+            return warp::reply::json(&"job_list file doesn't exist");
+        };
+
+    match jobs.get(&job.agent_uuid) {
+        Some(agent_jobs) => match agent_jobs.get(&job.job_uuid) {
+            Some(job_details) => match job_details.get(&job.command) {
+                Some(output) => {
+                    if output.is_empty() {
+                        return warp::reply::json(&"Output Pending");
+                    } else {
+                        let reply = format!(
+                            "Command:{}  Output:{}",
+                            &job.command.to_string(),
+                            output.to_string()
+                        );
+                        return warp::reply::json(&reply);
+                    }
+                }
+                None => return warp::reply::json(&"Invalid command"),
+            },
+            None => return warp::reply::json(&"Invalid job uuid"),
+        },
+        None => return warp::reply::json(&"Invalid agent uuid"),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Client -> Server
@@ -263,8 +312,10 @@ async fn main() {
         .and(warp::body::json())
         .map(|job: Job| schedule_job(job));
     // // Client -> Server
-    // let get_job_output_route = warp::path!("get_job_output")
-    // .and(warp::get)
+    let get_job_output_route = warp::path!("get_job_output")
+        .and(warp::get())
+        .and(warp::body::json())
+        .map(|job: Job| get_job_output(job));
 
     // Agent -> Server
     let pending_jobs_route = warp::path!("pending_jobs")
@@ -282,7 +333,11 @@ async fn main() {
         .and(warp::body::json())
         .map(|agent: Agent| register_agent(agent));
 
-    let get_routes = warp::get().and(list_agents_route.or(pending_jobs_route));
+    let get_routes = warp::get().and(
+        list_agents_route
+            .or(pending_jobs_route)
+            .or(get_job_output_route),
+    );
     let post_routes = warp::post().and(schedule_job_route.or(register_agent_route));
     let routes = get_routes.or(post_routes).or(jobs_output_route);
 

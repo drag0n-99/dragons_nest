@@ -3,6 +3,8 @@ use reqwest::{Client, Error};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
+use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -43,20 +45,30 @@ async fn list_jobs(client: &Client) -> Result<(), Error> {
     Ok(())
 }
 
-fn request_job_output(job_requests: Vec<Job>) {
+async fn request_job_output(client: &Client, job_request: &Job) -> Result<(), Error> {
+    ///! Unsafe unwrap change
     loop {
-        for request in job_requests.iter() {
-            // Is the job done
-            // if so print command: output
-            // if so remove it from the vector and continue
+        // Low perf you have to serialize on every loop
+        let serialized_job = serde_json::to_string(&job_request).unwrap();
+        let content = client
+            .get("https://127.0.0.1:3031/get_job_output")
+            .body(serialized_job)
+            .send()
+            .await?
+            .text()
+            .await?;
+        let reply = format!("{}", content);
+        println!("text: {reply}\n");
+        if !content.to_string().contains("Output Pending") {
+            break;
         }
 
-        // If all the jobs are complete
-        // If the job_requests vector is empty break
+        thread::sleep(Duration::from_secs(1));
     }
+    Ok(())
 }
 
-async fn send_job(client: &Client, agent_uuid: &String, command: &String) -> Result<(), Error> {
+async fn send_job(client: &Client, agent_uuid: &String, command: &String) -> Result<(Job), Error> {
     let job = Job {
         agent_uuid: agent_uuid.clone(),
         job_uuid: Uuid::new_v4().to_string(),
@@ -78,7 +90,7 @@ async fn send_job(client: &Client, agent_uuid: &String, command: &String) -> Res
     println!("text: {content:?}");
     println!("agent id: {}", agent_uuid);
     println!("cmd: {}", command);
-    Ok(())
+    Ok((job))
 }
 
 #[tokio::main]
@@ -135,13 +147,14 @@ async fn main() -> Result<(), Error> {
                 .get_one::<String>("command")
                 .expect("Command is required");
 
-            send_job(&client, agent_uuid, command).await?;
+            let job = send_job(&client, agent_uuid, command).await?;
             println!(
                 "run exec() function, agent_uuid is {} and command is {}",
                 agent_uuid, command
             );
+            request_job_output(&client, &job).await?;
         }
-        _ => unreachable!("Exhaustive checking in subcommand match failed"),
+        _ => unreachable!("Error: No subcommand match"),
     }
 
     Ok(())
