@@ -43,6 +43,19 @@ async fn list_jobs(client: &Client) -> Result<(), Error> {
     Ok(())
 }
 
+fn request_job_output(job_requests: Vec<Job>) {
+    loop {
+        for request in job_requests.iter() {
+            // Is the job done
+            // if so print command: output
+            // if so remove it from the vector and continue
+        }
+
+        // If all the jobs are complete
+        // If the job_requests vector is empty break
+    }
+}
+
 async fn send_job(client: &Client, agent_uuid: &String, command: &String) -> Result<(), Error> {
     let job = Job {
         agent_uuid: agent_uuid.clone(),
@@ -55,7 +68,7 @@ async fn send_job(client: &Client, agent_uuid: &String, command: &String) -> Res
     let serialized_job = serde_json::to_string(&job).unwrap();
 
     let content = client
-        .post("https://127.0.0.1:3031/send_job")
+        .post("https://127.0.0.1:3031/schedule_job")
         .body(serialized_job)
         .send()
         .await?

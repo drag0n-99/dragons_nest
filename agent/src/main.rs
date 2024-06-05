@@ -4,6 +4,8 @@ use serde_json::json;
 use std::fs::File;
 use std::io::{prelude::*, Read};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -14,29 +16,29 @@ struct Job {
     output: String,
 }
 
-async fn run_command(mut job: Job, client: &Client, uuid: &String) -> Result<(), Error> {
-    let output = Command::new("sh").arg("-c").arg(&job.command).output();
-
-    job.output = match output {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-            if !output.status.success() {
-                format!(
-                    "Command failed with status: {}\nStderr: {}",
-                    output.status, stderr
-                )
-            } else {
-                stdout
+async fn run_command(mut commands: Vec<Job>, client: &Client, uuid: &String) -> Result<(), Error> {
+    for job in commands.iter_mut() {
+        let output = Command::new("sh").arg("-c").arg(&job.command).output();
+        job.output = match output {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if !output.status.success() {
+                    format!(
+                        "Command failed with status: {}\nStderr: {}",
+                        output.status, stderr
+                    )
+                } else {
+                    stdout
+                }
             }
-        }
-        Err(e) => format!("Error executing command: {}", e),
-    };
+            Err(e) => format!("Error executing command: {}", e),
+        };
+    }
 
     let send_output_status = client
         .post("https://127.0.0.1:3031/job_output")
-        .json(&job)
+        .json(&commands)
         .send()
         .await?
         .text()
@@ -109,23 +111,24 @@ async fn main() -> Result<(), Error> {
     loop {
         let body = json!({"uuid": uuid});
         let cmd_to_run = client
-            .get("https://127.0.0.1:3031/list_jobs")
+            .get("https://127.0.0.1:3031/pending_jobs")
             .json(&body)
             .send()
             .await?
             .text()
             .await?;
-        println!("text: {}", cmd_to_run);
-        // let job: Job = serde_json::from_str(&cmd_to_run).unwrap_or_else(|err| {
-        //     eprintln!("Error parsing JSON: {}", err);
-        //     eprintln!("The job_list file on the server is probably not there or empty");
-        //     std::process::exit(1);
-        // });
-        // //println!("{:?}", job);
-        // // if job to run -> run_command(job);
-        // ///! unsafe unwrap
-        // run_command(job, &client, &uuid).await.unwrap();
-        break;
+        match serde_json::from_str(&cmd_to_run) {
+            Ok(commands) => run_command(commands, &client, &uuid).await.unwrap(),
+            Err(err) => {
+                if err.to_string().contains("No commands to process") {
+                    println!("No commands to process.");
+                } else {
+                    eprintln!("Error parsing JSON: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        };
+        thread::sleep(Duration::from_secs(4));
     }
 
     Ok(())

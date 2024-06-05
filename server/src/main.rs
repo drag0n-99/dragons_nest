@@ -81,7 +81,7 @@ fn register_agent(agent: Agent) -> impl Reply {
 The job store is a HashMap<String,HashMap<String,HashMap<String,String>>>
                          agent_uuid,     job_uuid,        job,   output
 */
-fn store_job(job: Job) -> impl Reply {
+fn schedule_job(job: Job) -> impl Reply {
     // First validate the job
     // Is the agent_uuid provided an agent we have access to
     let file_path = "agent_list";
@@ -152,7 +152,7 @@ fn store_job(job: Job) -> impl Reply {
     warp::reply::json(&"Successfully stored job")
 }
 
-fn job_output(job: Job) -> impl Reply {
+fn job_output(mut commands: Vec<Job>) -> impl Reply {
     let file_path = "job_list";
 
     println!("loading jobs for job_output\n");
@@ -174,20 +174,27 @@ fn job_output(job: Job) -> impl Reply {
         };
 
     println!("Setting job output for job_list\n");
-    // Set the output for the corresponding agent_uuid and job_uuid
-    match jobs.get_mut(&job.agent_uuid) {
-        Some(job_map) => match job_map.get_mut(&job.job_uuid) {
-            Some(command_map) => {
-                command_map.insert(job.command, job.output);
-            }
-            None => return warp::reply::json(&"invalid job_uuid"),
-        },
-        None => return warp::reply::json(&"invalid agent_uuid"),
+    for job in commands.iter_mut() {
+        // Set the output for the corresponding agent_uuid and job_uuid
+        match jobs.get_mut(&job.agent_uuid) {
+            Some(agent_jobs) => match agent_jobs.get_mut(&job.job_uuid) {
+                Some(job_details) => {
+                    // .clone() creates deep copy job is a mutable reference
+                    // from .iter_mut() you have to move ownership of the string
+                    // into the hashmap, that's why you have to .clone() and do
+                    // a deep copy
+                    job_details.insert(job.command.clone(), job.output.clone());
+                }
+                None => return warp::reply::json(&"invalid job_uuid"),
+            },
+            None => return warp::reply::json(&"invalid agent_uuid"),
+        }
     }
 
     // Write the jobs HashMap to the job_list file
     ///! unsafe unwrap
     let serialized_jobs = serde_json::to_string(&jobs).unwrap();
+    println!("Serialized jobs in job_output: {}\n", serialized_jobs);
     ///! unsafe unwrap
     let mut file = File::create(file_path).unwrap();
     ///! unsafe unwrap
@@ -196,7 +203,7 @@ fn job_output(job: Job) -> impl Reply {
     warp::reply::json(&"Successfully stored output")
 }
 
-fn list_jobs(agent: Agent) -> impl Reply {
+fn pending_jobs(agent: Agent) -> impl Reply {
     let file_path = "job_list";
 
     println!("loading jobs for list_jobs()\n");
@@ -214,7 +221,7 @@ fn list_jobs(agent: Agent) -> impl Reply {
                 serde_json::from_str(&contents).unwrap();
             jobs
         } else {
-            return warp::reply::json(&"job_store file doesn't exist");
+            return warp::reply::json(&"No commands to process");
         };
 
     println!("agent uuid: {}\n", agent.uuid);
@@ -237,6 +244,9 @@ fn list_jobs(agent: Agent) -> impl Reply {
                 }
             }
 
+            if commands.is_empty() {
+                return warp::reply::json(&"No commands to process");
+            }
             return warp::reply::json(&commands);
         }
         None => return warp::reply::json(&"invalid agent_uuid"),
@@ -245,26 +255,35 @@ fn list_jobs(agent: Agent) -> impl Reply {
 
 #[tokio::main]
 async fn main() {
+    // Client -> Server
     let list_agents_route = warp::path!("list_agents").and(warp::fs::file("agent_list"));
-    let list_jobs_route = warp::path!("list_jobs")
+    // Client -> Server
+    let schedule_job_route = warp::path!("schedule_job")
+        .and(warp::post())
+        .and(warp::body::json())
+        .map(|job: Job| schedule_job(job));
+    // // Client -> Server
+    // let get_job_output_route = warp::path!("get_job_output")
+    // .and(warp::get)
+
+    // Agent -> Server
+    let pending_jobs_route = warp::path!("pending_jobs")
         .and(warp::get())
         .and(warp::body::json())
-        .map(|agent: Agent| list_jobs(agent));
+        .map(|agent: Agent| pending_jobs(agent));
+    // Agent -> Server
     let jobs_output_route = warp::path!("job_output")
         .and(warp::post())
         .and(warp::body::json())
-        .map(|output: Job| job_output(output));
-    let store_job_route = warp::path!("send_job")
-        .and(warp::post())
-        .and(warp::body::json())
-        .map(|job: Job| store_job(job));
+        .map(|commands: Vec<Job>| job_output(commands));
+    // Agent -> Server
     let register_agent_route = warp::path!("register_agent")
         .and(warp::post())
         .and(warp::body::json())
         .map(|agent: Agent| register_agent(agent));
 
-    let get_routes = warp::get().and(list_agents_route.or(list_jobs_route));
-    let post_routes = warp::post().and(store_job_route.or(register_agent_route));
+    let get_routes = warp::get().and(list_agents_route.or(pending_jobs_route));
+    let post_routes = warp::post().and(schedule_job_route.or(register_agent_route));
     let routes = get_routes.or(post_routes).or(jobs_output_route);
 
     warp::serve(routes)
